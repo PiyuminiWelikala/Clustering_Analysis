@@ -1,0 +1,855 @@
+---
+title: "Clustering Analysis of Global Prosperity Indicators"
+author: "Sandaru Welikala, Laura Granada, Diego Diaz, Julio Real"
+date: "2024-11-09"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+This project seeks to investigate clustering methods to uncover meaningful patterns and groupings within two distinct datasets, each chosen to emphasize various clustering techniques. Specifically, in this portion of the project, hierarchical clustering will be applied using different types of linkage methods, with a focus on analyzing the Global Prosperity and Development Indicators dataset.
+
+The Global Prosperity and Development Indicators dataset includes a wide range of metrics designed to measure the prosperity and development of countries across the globe. It covers various domains such as governance, economic quality, safety and security, personal freedom, social capital, education, health, and living conditions. The data were collected from reputable global sources, ensuring high accuracy and reliability. The dataset features country-level aggregated scores and rankings, providing a comprehensive overview of performance in each domain. These indicators are commonly used for comparative analysis, policy-making, and research on global development trends. The data reflect the status of each country across multiple dimensions, making it a valuable resource for assessing regional disparities and identifying areas for improvement in global prosperity.
+
+```{r}
+library(factoextra)
+library(clustertend)
+library(hopkins)
+library(NbClust)
+library(dendextend)
+library(fpc)
+library(clValid)
+library(cluster)
+library(ggplot2)
+library(GGally)
+library(tibble)
+library(igraph)
+library(reshape2)
+library(rnaturalearth)
+library(sf)
+library(stringr)
+library(dplyr)
+library(visdat)
+library(gridExtra)
+```
+
+```{r}
+country <- read.csv("../data/global prosperity and development indicators.csv")
+```
+
+## Exploratory Data Analysis of the Data Sets
+
+#### EDA Prosperity
+
+```{r}
+head(country)
+```
+
+#### EDA Prosperity Index
+
+```{r}
+head(country,2)
+
+# Remove non numeric columns
+country_new <-  country[,-1]
+head(country_new, 2)
+```
+
+```{r}
+# Dimensions
+paste("The Prosperity Index data numerical subset is comprised of:", dim(country_new)[1]," observarions/rows and", dim(country_new)[2], "variables/features/columns")
+```
+
+```{r}
+# Summary
+summary(country_new)
+```
+
+```{r}
+# Calculate standard deviation for each numeric column
+sds <- apply(country[, sapply(country, is.numeric)], 2, sd)
+
+print(sds)
+```
+
+```{r}
+# Missing values
+anyNA(country_new)
+
+vis_miss(country_new)
+```
+
+There are no missing values in the data set.
+
+```{r}
+# Visualization of data
+cor(country_new)
+```
+
+```{r}
+# Enhanced ggpairs plot
+pairwise_plot <- ggpairs(
+  country_new,
+  cardinality_threshold = 200,
+  upper = list(
+    continuous = wrap("cor", size = 3) # Adjust correlation text size
+  ),
+  lower = list(
+    continuous = wrap("points", alpha = 0.6, color = "blue") # Add color and transparency
+  ),
+  diag = list(
+    continuous = wrap("densityDiag", fill = "skyblue") # Colored density plots
+  ),
+  title = "Pairwise Plot of Prosperity data"
+) +
+  theme_light() + # Apply a light theme for better contrast
+  theme(
+    axis.text.x = element_text(
+      angle = 45, hjust = 1, size = 10 # Rotate and adjust x-axis text
+    ),
+    axis.text.y = element_text(size = 10),            # Adjust y-axis text
+    plot.title = element_text(
+      size = 16, face = "bold" # Title styling
+    )
+  )
+pairwise_plot
+ggsave("ggpairs_plots.png", plot = pairwise_plot, width = 14, height = 10)
+```
+
+```{r}
+# Box plots to detect outliers
+par(mfrow = c(4, 2), mar = c(2, 2, 2, 2)) 
+for (i in 2:(ncol(country))) {
+  boxplot(country[[i]], main = paste("Boxplot of", colnames(country)[i]), col = "lightgreen")
+}
+```
+
+```{r, fig.width=6, fig.height=4.5}
+# Calculate the correlation matrix
+corr_matrix <- cor(country_new)
+
+# Reshape the correlation matrix for ggplot
+corr_melted <- melt(corr_matrix)
+
+ggplot(data = corr_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile() + 
+  scale_fill_gradient2(low = "#FFEB99", mid = "white", high = "skyblue", midpoint = 0, limit = c(-1, 1)) +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 2) +  # Add correlation values inside the boxes
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        axis.text.y = element_text(angle = 0)) +
+  labs(title = "Correlation Matrix Heatmap", x = "Variables", y = "Variables")
+```
+
+```{r}
+# Variables where correlation is greater than 0.90
+high_corr_pairs <- corr_melted[corr_melted$value > 0.90 & corr_melted$Var1 != corr_melted$Var2, ]
+
+# Create a unique representation of the pair to handle duplicates, (Var1, Var2) and (Var2, Var1) are considered the same
+high_corr_pairs$pair <- apply(high_corr_pairs[, c("Var1", "Var2")], 1, function(x) paste(sort(x), collapse = "_"))
+
+# Remove duplicates by selecting unique pairs
+high_corr_pairs_unique <- high_corr_pairs[!duplicated(high_corr_pairs$pair), ]
+
+# Now display the cleaned data without duplicates
+high_corr_pairs_unique <- high_corr_pairs_unique[, c("Var1", "Var2", "value")]
+
+# Display the results
+print(high_corr_pairs_unique)
+```
+
+**Variable distribution**: 
+- All variables present a semi normal distribution. 
+- *Average*, *Personal Freedom*, *Investment Environment*, present a slight bi modal pattern.
+- *Safety Security*, *Living Conditions*, *Health* and *Education* are left skewed.  
+
+*AverageScore*: The distribution appears to be fairly symmetrical, with a peak around the mid-to-high range, suggesting that most observations fall around the middle, with fewer extreme low or high scores. This is characteristic of a somewhat normal distribution.
+
+*SafetySecurity*: This variable shows a slightly left skewed distribution. This indicates that many countries in the dataset have relatively high safety and security levels, while fewer countries score on the lower end.
+
+*PersonalFreedom*: The distribution appears to be fairly symmetrical. This indicates moderate variability, with a majority of countries having mid-level personal freedom scores but some reaching high freedom levels.
+
+*Governance*: The variable distribution shows a slightly right skew. This indicates that many countries in the dataset have a score lower on governance quality, with fewer achieving high governance scores.
+
+*SocialCapital*: The variable distribution appears to be moderately symmetrical with a peak in the middle range. This implies that most countries have average levels of social capital, with fewer countries at the extreme ends.
+
+*InvestmentEnvironment*: This variable has a slightly right skewed distribution with peaks in the mid-to-high range. This suggests that many countries have moderate to high scores in this areas, with fewer outliers on the lower end.
+
+*Enterprise Conditions*: The distribution appears to be fairly symmetrical, with a peak around the mid-to-high range, suggesting that most observations fall around the middle, with fewer extreme low or high scores. This is characteristic of a somewhat normal distribution.
+
+*MarketAccessInfrastructure*: This variable has a slightly right skewed distribution with peaks in the mid-to-high range. This suggests that many countries have moderate to high scores in this areas, with fewer outliers on the lower end.
+
+*EconomicQuality*: The distribution is somewhat symmetrical, centred around the middle range. This implies that most countries have average economic quality scores, with fewer scoring extremely high or low.
+
+*LivingConditions*: LivingConditions has a right-skewed distribution, with a concentration of scores in the upper range. This suggests that many countries in the dataset have relatively good living conditions, with a smaller proportion of countries on the lower end.
+
+*Health*: This distribution is also right-skewed, with a peak in the upper range, indicating that many countries have high health scores. Few countries fall into the lower health score range.
+
+*Education*: Similar to Health, the Education variable shows a right-skewed distribution with a concentration of high scores, suggesting that education levels are generally high across the dataset.
+
+*NaturalEnvironment*: The histogram for Natural Environment is more spread out and possibly left-skewed, with a concentration in the mid-to-lower range. This suggests that while many countries have average to lower scores for natural environment, fewer have extremely high scores.
+
+**Correlation**:
+There is a *very high/strong* (>.9)correlation between some pairs of variables, such as:
+- *Investment Environment* - *Governance* (.908)
+- *Enterprise Conditions* - *Governance* (.913)
+- *Investment Environment* - *Enterprise Conditions* (.929)
+- *Investment Environment* - *Market Access Infrastructure* (.930)
+- *Living* - *Market Access Infrastructure* (.917)
+- *Market Access Infrastructure* - *Education* (.914)
+- *Education* - *Living Conditions* (.938)
+
+The *Average Score* is highly correlated to all variables, presumably because it is composed of all the variables´ average.
+
+The rest of the variables share a relatively mild correlation between each other in a range 0.4495919 to 0.8839161. 
+
+### Data Set Destription
+
+This dataset contains rankings and indicators from the *2023 Legatum Prosperity Index*, assessing countries based on various dimensions of prosperity and development. It includes measures of safety, freedom, governance, economic quality, and more. The data is valuable for identifying patterns of prosperity and clustering countries based on development indicators.
+
+```{r}
+# Create a table with each variable's information
+variables <- tibble(
+  Feature = c("AveragScore", "SafetySecurity", "PersonalFreedom", "Governance", "SocialCapital",
+              "InvestmentEnvironment", "EnterpriseConditions", "MarketAccessInfrastructure",
+              "EconomicQuality", "LivingConditions", "Health", "Education", "NaturalEnvironment"),
+  Range = c("30.40 - 84.55", "16.54 - 96.32", "16.16 - 94.10", "13.09 - 90.41", "23.01 - 82.56",
+            "21.69 - 84.99", "20.50 - 83.84", "24.23 - 85.75", "24.46 - 80.10", "19.21 - 95.86",
+            "31.95 - 86.89", "16.78 - 91.44", "33.67 - 78.74"),
+  Mean = c(58.06,67.24,56.83, 50.36,54.47,53.01, 54.79,55.02,51.57,69.80,68.62,58.72,56.23),
+  Description = c("The overall average score of the country across all indicators.", "Measures freedom from conflict, terrorism, and crime. ", "Assesses rights to speech, assembly, and individual autonomy.",
+                  "Quality of democracy, rule of law, and government effectiveness.", "Strength of personal relationships and civic engagement.", "Conditions for private investment and access to credit.",
+                  "Business environment and market competition.", "Ease of trade and quality of infrastructure. ",
+                  "Macroeconomic stability and employment quality. ", "Standard of living and access to basic services.", "Measures population health and healthcare access. ",
+                  "Quality and accessibility of education.", "Environmental quality and sustainability. "),
+  Units_of_measurement = c("Points", "Points", "Points", "Points", "Points", 
+                           "Points", "Points", "Points", "Points", "Points", 
+                           "Points", "Points", "Points")
+)
+
+# Print the table
+print(variables)
+View(variables)
+```
+
+## Assesing Clustering Tendency
+
+Before applying clustering methods, it’s essential to determine if the data contains meaningful clusters. This step prevents misinterpretation, as clustering algorithms will produce clusters regardless of whether they are meaningful or not. The purpose of assessing clustering tendency is to determine if the dataset has non-random structure that justifies clustering.
+
+There are two methods for **Assessing Cluster Tendency**:
+**Hopkins Statistic** is a common method for assessing clustering tendency by comparing the spatial randomness of the data. To calculate the *Hopkins statistic*, a subset of points is randomly chosen, and for each point, the distance to its nearest neighbour within the data and the distance to a synthetic random point are calculated. The ratio of these distances forms the basis for the *Hopkins statistic*.
+  * Values closer to 1 indicate a higher likelihood of clustering structure.
+  * Values around 0.5 indicate the data likely doesn't have a cluster structure (randomly distributed). 
+  * Values close to 0 indicate a highly uniform distribution.
+
+**Visual Assessment of Cluster Tendency (VAT)** approach creates an ordered dissimilarity image (ODI), which visually highlights clustering structure by displaying similar objects in consecutive order. Square-shaped blocks along the diagonal in the image suggest potential clusters.
+
+### Preparation
+
+```{r}
+# Standardize the data set
+country_scaled <- country.scaled <- scale(country_new)
+```
+
+### Hopkins Statistic
+
+```{r}
+# Compute Hopkins statistic
+hopkins_result <- get_clust_tendency(country_scaled, n = nrow(country_scaled) - 1, graph = FALSE)
+hopkins_stat <- hopkins_result$hopkins_stat
+
+paste("The Hopkins Statistic has a value of:", hopkins_stat)
+```
+
+The Hopkins Statistic has a value of: 0.755996478403451 meaning the data has a moderately high likelihood of clustering structure.
+
+### 3. Visual Inspection with PCA
+
+```{r}
+# Plot PCA for cluster tendency visualization
+fviz_pca_ind(prcomp(country_scaled), 
+             title = "PCA - Prosperity", 
+             geom = "point", 
+             col.ind = "blue",     
+             ggtheme = theme_classic())
+```
+
+*'Dim1'* and *'Dim2'* account for *84.6%* of the variance, indicating that these two components capture a significant amount of the data’s structure, allowing to view most of the data’s variability in this 2D plot. This plot suggests that the data has some spread but no strong, obvious clustering pattern in the two dimensions shown.
+
+### 3. Visual Assessment of Clustering Tendency (VAT)
+
+Firstly, we calculate the *distance matrix* on the scaled data set. 
+
+```{r}
+# Calculate distance matrix
+diss_matrix <- dist(country_scaled, method = "euclidean")
+
+# Compute and visualize the dissimilarity matrix
+fviz_dist(diss_matrix, show_labels = FALSE)+
+  labs(title = "VAT - Distance Matrix Heatmap")
+
+```
+
+The dissimilarity matrix image confirms that there is a cluster structure in the "Global Country Development & Prosperity Index" data (apparently 3 clusters). There are regions with high similarity (clusters) among some observations, as evidenced by the block-like patterns along the diagonal. 
+
+In conclusion, with a *Hopkins* value of approximately *0.756*, we can infer that the dataset likely contains clusters, making it suitable for clustering analysis. The dimension reduction capturing variability (PCA) show a slight pattern like structure. The dissimilarity matrix heat map shows there are regions with high similarity, pointing at the existence of clusters.
+
+## Determining the number of clusters 
+
+### Elbow Method
+
+The Elbow Method involves plotting the within-cluster sum of squares (WSS) against the number of clusters (k). The WSS will decrease as the number of clusters increases, but at some point, the decrease becomes marginal. This point is called the "elbow," and it indicates the optimal number of clusters.
+
+```{r}
+# Compute the within-cluster sum of squares for different numbers of clusters
+set.seed(123)
+plot1<-fviz_nbclust(country_scaled, kmeans, method = "wss") + geom_vline(xintercept = 3, linetype = 2)+
+  labs(subtitle = "Elbow Method")
+plot1
+```
+
+A visual inspection of the possible clusters indicates the elbow is present at K = 3.
+
+### Silhouette Method
+
+The *Silhouette Method* calculates the average silhouette width for different numbers of clusters. The silhouette width measures how similar each point is to its own cluster compared to other clusters. Higher values indicate better-defined clusters. The optimal number of clusters is where the silhouette width is highest.
+
+```{r}
+plot2<-fviz_nbclust(country_scaled, kmeans,method = "silhouette")+ 
+  labs(subtitle = "Silhoutte method")
+plot2
+```
+
+According to the *Silhouette Method* the silhouette width is largest at K =2.
+
+### Gap Statistic
+
+The *Gap Statistic* compares the total within-cluster variation for different numbers of clusters with that expected under a null reference distribution (random, uniform data). The optimal number of clusters is where the gap statistic is maximized.
+
+```{r}
+set.seed(123)
+plot3<-fviz_nbclust(country_scaled, FUN = kmeans, nstart = 25,  method = "gap_stat", nboot = 50)+
+  labs(subtitle = "Gap statistic method")
+plot3
+```
+
+According to the *Gap Statistic* the maximized gap is largest at K =7.
+
+```{r,  fig.width=7, fig.height=8}
+# Arrange all plots into a grid
+  g <- grid.arrange(plot1, plot2, plot3,
+                    ncol = 2)
+```
+
+### Compute-Nbclust
+
+```{r}
+nb <- NbClust(country_scaled, distance = "euclidean", min.nc = 2, max.nc = 10, 
+              method = "kmeans") 
+```
+
+```{r}
+data <- data.frame(
+  clusters = c(2, 3, 7, 8, 10),
+  frequency = c(4, 15, 1, 1, 2)
+)
+
+ggplot(data, aes(x = clusters, y = frequency)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(
+    title = "Optimal number of clusters - k = 3",
+    x = "Number of clusters k",
+    y = "Frequency among all indices"
+  ) +
+  theme_minimal()
+```
+
+After using the two functions (fviz_nbclust and NbClust) for determining the optimal numbers of clusters we can get following results:
+
+Elbow method: 3 Clusters
+Silhouette method: 2 Clusters
+Gap Statistic method: 7 Clusters
+NbClust function: 3 Clusters
+
+#### Cluster Selection
+
+We are going to choose our optimal numbers of clusters as 3, considering that 3 is the numbers of clusters obtained in the Elbow method and the Nbclust function. 
+
+```{r}
+set.seed(123)
+
+hc.res <- eclust(country_scaled, "hclust", k = 3, graph = FALSE)
+
+fviz_cluster(list(data = country_scaled, cluster = hc.res$cluster),
+             ellipse.type = "convex", geom = "point", stand = FALSE,
+             palette = "jco", ggtheme = theme_classic())
+```
+
+### Apply Hierarchical Clustering with Different Linkage Methods and visualize Dendograms for each Linkage Method
+
+### Ward's method
+
+```{r}
+rownames(country) <- country[, 1]
+dd <- dist(scale(country[, -1]), method = "euclidean")
+```
+
+```{r}
+hc_ward <- hclust(dd, method = "ward.D2")
+
+fviz_dend(hc_ward, 
+          cex = 0.5, 
+          main = "Dendrogram - Ward's Method", 
+          k = 3, 
+          k_colors = "jco", 
+          type = "phylogenic", 
+          repel = TRUE)
+# OR                  
+png("dendrogram_plot_ward.png", width = 1200, height = 800)
+fviz_dend(hc_ward, 
+          cex = 0.5, 
+          main = "Dendrogram - Ward's Method", 
+          k = 3, 
+          k_colors = c("red", "blue", "darkgreen"))
+dev.off()
+
+fviz_dend(hc_ward, 
+          cex = 0.5, 
+          main = "Dendrogram - Ward's Method", 
+          k = 3, 
+          k_colors = c("red", "blue", "darkgreen"))
+```
+
+### Single linkage
+
+```{r}
+# Hierarchical clustering for Single Linkage
+hc_single <- hclust(dd, method = "single")
+
+# Display Single Linkage Dendrogram
+fviz_dend(hc_single, 
+          main = "Dendrogram - Single Linkage", 
+          k = 3, 
+          k_colors = "jco")
+
+# Save the Single Linkage Dendrogram
+png("dendrogram_plot_single.png", width = 1200, height = 800)
+fviz_dend(hc_single, 
+          k = 3, 
+          k_colors = c("red", "blue", "darkgreen"), 
+          type = "phylogenic", 
+          repel = TRUE)
+dev.off()
+
+# Display Single Linkage Dendrogram
+fviz_dend(hc_single, 
+          k = 3, 
+          k_colors = c("red", "blue", "darkgreen"), 
+          type = "phylogenic", 
+          repel = TRUE)
+```
+
+### Complete linkage
+
+```{r}
+# Hierarchical clustering for Complete Linkage
+hc_complete <- hclust(dd, method = "complete")
+
+# Display Complete Linkage Dendrogram (circular type)
+fviz_dend(hc_complete, 
+          main = "Dendrogram - Complete Linkage", 
+          k = 3, 
+          k_colors = "jco")
+
+# Save the circular Complete Linkage Dendrogram to an image
+png("dendrogram_plot_complete_circular.png", width = 1200, height = 800)
+fviz_dend(hc_complete, 
+          main = "Dendrogram - Complete Linkage", 
+          k = 3, 
+          k_colors = c("red", "blue", "darkgreen"), 
+          type = "circular")
+dev.off()
+
+# Display the circular Complete Linkage Dendrogram
+fviz_dend(hc_complete, 
+          main = "Dendrogram - Complete Linkage", 
+          k = 3, 
+          k_colors = c("red", "blue", "darkgreen"), 
+          type = "circular")
+```
+
+### Average linkage
+
+```{r}
+# Hierarchical clustering for Average Linkage
+hc_average <- hclust(dd, method = "average")
+
+# Save the Average Linkage Dendrogram to an image
+png("dendrogram_plot_average_linkage.png", width = 1200, height = 800)
+fviz_dend(hc_average, 
+          main = "Dendrogram - Average Linkage", 
+          k = 3, 
+          k_colors = c("red", "blue", "darkgreen"), 
+          cex = 0.5, 
+          rotate = FALSE,  
+          mar = c(3, 5, 2, 1))
+dev.off()
+
+# Display the Average Linkage Dendrogram
+fviz_dend(hc_average, 
+          main = "Dendrogram - Average Linkage", 
+          k = 3, 
+          k_colors = c("red", "blue", "darkgreen"), 
+          cex = 0.5, 
+          rotate = FALSE,  
+          mar = c(3, 5, 2, 1)) 
+
+fviz_dend(hc_average, cex = 0.5, main = "Dendrogram - Ward's Method", k = 3, k_colors = "jco", type = "phylogenic", repel = TRUE)   
+```
+
+## Cluster Validity Indices (Silhouette Score)
+
+```{r}
+fviz_silhouette(hc.res, palette = "jco", ggtheme = theme_classic()) +
+  labs(title = "Silhouette Analysis - Hierarchical Clustering")
+```
+
+```{r}
+# Silhouette information
+silinfo <- hc.res$silinfo
+sil <- silinfo$widths  # Extract silhouette widths
+# Average silhouette width of each cluster
+cat("Cluster-wise average silhouette widths:\n")
+print(silinfo$clus.avg.widths)
+# The total average (mean of all individual silhouette widths)
+cat("\nTotal average silhouette width:\n")
+print(silinfo$avg.width)
+# The size of each clusters
+cat("\nCluster sizes:\n")
+print(hc.res$size)
+```
+
+We can see that average width in Cluster 1 is greater than the other averages, assuming a better clustering in these observations, and the average Silhouette coefficient with is greater than 0 (0.3561392) so we could assume that the observations are clustered, however there might be some overlapping,  we have to check if there are samples with a negative coefficient.
+
+```{r}
+# Silhouette widths of each observation
+silinfo$widths[, 1:3]
+```
+
+```{r}
+# Identify Negative Silhouette Observations
+neg_sil_index <- which(sil[, "sil_width"] < 0)
+neg_sil_samples <- sil[neg_sil_index, , drop = FALSE]
+
+cat("\nNegative silhouette samples:\n")
+print(neg_sil_samples)
+cat("\nNumber of negative silhouette samples:", nrow(neg_sil_samples))
+```
+
+We can see that samples 45 & 48 in Cluster 1 and samples 43 & 116 in Cluster 2, have a negative silhouette coefficient, meaning that they are not in the right cluster (or could be considered as outliers), and they should belong to Cluster 2, Cluster 2, Cluster 1 and Cluster 3 respectively.
+
+```{r}
+# Convert clusters to a factor
+hc_clust <- as.factor(hc.res$cluster)
+
+# Perform PCA
+pca_result <- prcomp(country_scaled)
+
+# PCA Plot with Negative Silhouette Samples Highlighted
+fviz_pca_ind(
+  pca_result,
+  geom = "point",
+  ellipse.type = "convex",
+  col.ind = hc_clust,  # Use factor for discrete palette
+  palette = "jco",
+  addEllipses = TRUE,
+  ggtheme = theme_minimal()
+) +
+  geom_point(
+    data = as.data.frame(pca_result$x)[rownames(neg_sil_samples), ],
+    aes(x = PC1, y = PC2),
+    color = "red", size = 3
+  ) +
+  labs(title = "Highlighting Negative Silhouette Observations")
+```
+
+## Cluster Stability Validation
+
+For the Cluster Stability Validation the following indices are going to be evaluated to asses the quality of clustering results.
+
+APN (Average Proportion of Non-overlap)
+Description: Measures the extent to which clustering assignments change when a subset of the data is removed. Lower values indicate more stable clustering solutions.
+Purpose: Evaluates the stability of clusters under resampling.
+
+AD (Average Distance)
+Description: Measures the average distance between observations and the centroids of their assigned clusters.
+Purpose: Evaluates the compactness of the clusters.
+
+ADM (Average Distance between Means)
+Description: Measures the average distance between cluster centroids (means).
+Purpose: Evaluates the separation between clusters.
+
+FOM (Figure of Merit)
+Description: Measures the prediction error when clustering is applied to subsets of the data. This is computed by predicting the cluster membership of the left-out subset using the clusters formed on the remaining data.
+Purpose: Evaluates the predictive performance of the clustering model.
+
+```{r}
+clust_validation <- clValid(obj = country_scaled, nClust = 3, clMethods = "hierarchical", validation = "stability", 
+  maxitems = 600, metric = "euclidean", method = "ward"
+)
+
+# Print summary of the stability validation results
+summary(clust_validation)
+```
+
+```{r}
+clust_validation <- clValid(obj = country_scaled, nClust = 3, clMethods = "hierarchical", validation = "stability", 
+  maxitems = 600, metric = "euclidean", method = "single"
+)
+
+# Print summary of the stability validation results
+summary(clust_validation)
+```
+
+```{r}
+clust_validation <- clValid(obj = country_scaled, nClust = 3, clMethods = "hierarchical", validation = "stability", 
+  maxitems = 600, metric = "euclidean", method = "complete"
+)
+
+# Print summary of the stability validation results
+summary(clust_validation)
+```
+
+```{r}
+clust_validation <- clValid(obj = country_scaled, nClust = 3, clMethods = "hierarchical", validation = "stability", 
+  maxitems = 600, metric = "euclidean", method = "average"
+)
+
+# Print summary of the stability validation results
+summary(clust_validation)
+```
+
+The cophenetic correlation coefficient measures how well the hierarchical clustering preserves the pairwise distances between points. So we can infer that the linkage method with the higher cophenetic correlation coefficient best preserves the original distances.
+
+```{r}
+# List of linkage methods to compare
+linkage_methods <- c("ward.D2", "single", "complete", "average")
+
+# Initialize an empty data frame to store cophenetic correlation results
+cophenetic_results <- data.frame(Method = character(), Cophenetic_Correlation = numeric())
+
+# Compute cophenetic correlation for each linkage method
+for (method in linkage_methods) {
+  # Perform hierarchical clustering with the specified method
+  hc <- hclust(diss_matrix, method = method)
+  
+  # Calculate cophenetic correlation
+  cor <- cor(cophenetic(hc), as.dist(diss_matrix))
+  
+  # Append the results to the data frame
+  cophenetic_results <- rbind(cophenetic_results, 
+                              data.frame(Method = method, Cophenetic_Correlation = cor))
+}
+
+# Print cophenetic correlation results
+print(cophenetic_results)
+```
+
+```{r}
+# Bar plot of cophenetic correlations
+ggplot(cophenetic_results, aes(x = Method, y = Cophenetic_Correlation, fill = Method)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  labs(title = "Comparison of Cophenetic Correlation Coefficients",
+       x = "Linkage Method", y = "Cophenetic Correlation") +
+  theme_minimal()
+```
+
+## Comparing Hierarchical Clustering vs other methods
+
+```{r}
+# Stability measures
+clmethods <- c("hierarchical","kmeans","pam")
+stab <- clValid(country_scaled, nClust = 2:10, clMethods = clmethods, 
+                validation = "stability")
+# Display only optimal Scores
+summary(stab)
+```
+
+```{r,  fig.width=8, fig.height=8}
+par(mfrow = c(2, 2))
+
+# Plot the stability measures
+plot(stab)
+
+par(mfrow = c(1, 1))
+```
+
+In APN Validation we can see that the lowest value comes with K-means Method and 2 Clusters
+In AD Validation we can see that the lowest value comes with PAM Method and 10 Clusters
+In ADM Validation we can see that the Highest value comes with K-means Method and 2 Clusters
+In FOM Validation we can see that the lowest value comes with K-means Method and 10 Clusters
+
+```{r}
+# Stability Measures Across Clustering Methods
+stab_scores <- as.data.frame(as.table(stab@measures))
+
+colnames(stab_scores) <- c("Metric", "Clusters", "Method", "Stability_Score")
+
+# Plot stability measures
+ggplot(stab_scores, aes(x = Clusters, y = Stability_Score, color = Method, linetype = Metric)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  labs(title = "Stability Measures Across Clustering Methods",
+       x = "Number of Clusters", y = "Stability Score") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+# Dunn Index for the Hierarchical clustering
+
+dunn_index <- cluster.stats(diss_matrix, hc.res$cluster)$dunn
+print(paste("Dunn Index:", dunn_index))
+```
+
+```{r}
+# Extract components of Dunn Index
+dunn_components <- cluster.stats(diss_matrix, hc.res$cluster)
+min_inter_dist <- dunn_components$min.separation
+min_inter_dist
+max_intra_dist <- dunn_components$diameter
+max_intra_dist
+```
+
+```{r}
+# Plot compactness vs separation
+compactness_separation <- data.frame(
+  Metric = c("Max Intra-cluster Distance", "Min Inter-cluster Distance"),
+  Value = c(max_intra_dist, min_inter_dist)
+)
+
+ggplot(compactness_separation, aes(x = Metric, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  labs(title = "Cluster Compactness and Separation", x = "", y = "Distance") +
+  theme_minimal()
+```
+
+The Dunn Index value of 0.2035 indicates that the the separation between the clusters formed by the Hierarchical method may not be very strong, as it is closer to 0 than to 1.
+
+## Cluster Analysis
+
+In this section, we are going to demonstrate how to apply average linkage to further analyze and define the clusters.
+
+*Cut the Dendrogram into Clusters*
+
+```{r}
+# Cut the tree into 3 clusters
+clusters <- cutree(hc_average, k = 3)
+
+# Add the cluster assignments back to your original data
+country$Cluster <- clusters
+```
+
+*Group the Data by Cluster*
+
+```{r}
+country1 <- country[, -1]
+# Group by Cluster and calculate summary statistics
+cluster_summary <- country1 %>%
+group_by(Cluster) %>%
+summarise(across(everything(), list(mean = mean, sd = sd), .names = "{.col}_{.fn}"))
+```
+
+*Visualize the Clusters*
+
+```{r}
+ggplot(country1, aes(x = factor(Cluster), y = AveragScore, fill = factor(Cluster))) +
+  geom_boxplot() +
+  labs(title = "Average score Distribution Across Clusters", x = "Cluster", y = "AveragScore") +
+  theme_minimal()
+```
+
+This plot visually represents the distribution of average scores for each of the three identified clusters.
+
+1. Cluster 1 (Red Box): This cluster exhibits the highest average scores, with a median value well above 70. The interquartile range (IQR) is fairly narrow, suggesting that the countries in this cluster have similar high scores. This indicates that these countries are performing well in terms of overall prosperity indicators.
+
+2. Cluster 2 (Green Box): Countries in Cluster 2 have an average score around 60, placing them in the middle range compared to the other clusters. The distribution shows greater variability compared to Cluster 1, as evidenced by a wider IQR. This suggests a mix of performance levels, with some countries scoring lower than the average while others perform moderately better.
+
+3. Cluster 3 (Blue Box): Cluster 3 shows the lowest average scores, with a median around 50. The box is notably lower on the scale, indicating that the countries in this cluster struggle more with prosperity indicators. There may also be a few outliers present, as indicated by the shorter whisker below the box.
+
+**Comparative analysis**: The clear differences among the clusters suggest distinct profiles of prosperity among the countries. Cluster 1 consists of thriving nations (developed countries), Cluster 2 includes moderately prosperous countries (developing countries), and Cluster 3 contains those with more significant challenges in development (underdeveloped countries).
+
+**Implications for Policy-making**: This clustering can inform policymakers by highlighting which countries may require more targeted interventions to enhance their prosperity levels. Understanding these distinctions allows for more tailored approaches to development.
+
+```{r}
+data = read.csv("../data/global prosperity and development indicators.csv")
+
+countries <- ne_countries(scale = "medium", returnclass = "sf")
+
+data$Country <- str_trim(data$Country)
+
+data$Cluster <- clusters
+```
+
+```{r}
+data <- data %>%
+  mutate(Country = case_when(
+    Country == "United States" ~ "United States of America",
+    Country == "Korea" ~ "South Korea",
+    Country == "North Korea" ~ "Dem. Rep. Korea",
+    Country == "Ivory Coast" ~ "Côte d'Ivoire",
+    Country == "Czech Republic" ~ "Czechia",
+    Country == "Dominican Republic" ~ "Dominican Rep.",
+    Country == "Bosnia and Herzegovina" ~ "Bosnia and Herz.",
+    Country == "Cape Verde" ~ "Cabo Verde",
+    Country == "São Tomé and Príncipe" ~ "São Tomé and Principe",
+    Country == "Equatorial Guinea" ~ "Eq. Guinea",
+    Country == "Swaziland" ~ "eSwatini",
+    Country == "Democratic Republic of Congo" ~ "Dem. Rep. Congo",
+    Country == "Central African Republic" ~ "Central African Rep.",
+    Country == "South Sudan" ~ "S. Sudan",
+    Country == "Lao PDR" ~ "Laos",
+    Country == "Macedonia" ~ "North Macedonia",
+    Country == "Syrian Arab Republic" ~ "Syria",
+    TRUE ~ Country
+  ))
+```
+
+```{r}
+data$Cluster <- factor(data$Cluster, levels = c("3", "2", "1"), labels = c("Underdeveloped", "Developing", "Developed"))
+
+world_data <- left_join(countries, data, by = c("name" = "Country"))
+
+# Exclude rows with missing Cluster values
+world_data <- world_data %>%
+  filter(!is.na(Cluster))
+
+cluster_colors <- c("Underdeveloped" = "red", "Developing" = "green", "Developed" = "purple")
+```
+
+```{r}
+ggplot(data = world_data) +
+  geom_sf(aes(fill = Cluster)) +
+  scale_fill_manual(values = cluster_colors, name = "Cluster", na.translate = FALSE) +
+  theme_minimal() +
+  labs(title = "Hierarchical Clustering Results on World Map",
+       caption = "Source: Hierarchical Clustering of Global Prosperity Data") +
+  theme(legend.position = "bottom")
+```
+   
+## Conclusion
+
+Based on the cluster validation, where APN, AD, ADM & FOM, where we can find values relatively close to 0, we can conclude that if we apply a hierarchical clustering, the average linkage method if the most suitable for our data, and if we observe that as per Cophenetic Correlation Coefficients shown above, we can also conclude that for Hierarchical Clustering, the average linkage is the most suitable for our data (Cophenetic correlation: 0.7129493).
+
+## Research Question:
+
+###	What methods exist for identifying and managing outliers in hierarchical clustering, and how might these be applied to countries with extreme prosperity scores?
+
+1. Visual methods, including deprogram analysis, where after performing hierarchical clustering, isolated clusters or small form clusters might be visible.
+
+2.- Using Silhouette score to assess how well each country fits its assigned cluster, where a low silhouette score (close to -1) indicates that a country is poorly clustered and might be considered as an outlier. (this detention method was used above identifying 7 sables with a negative score indicating a poor clustering and could be considered as outliers).
+
+3. - Applying k-medoids after hierarchical clustering can help mitigate the influence of outliers; as k-medoids uses actual data points as the center of clusters (medoids), which makes it less sensitive to extreme values.
+
+
+

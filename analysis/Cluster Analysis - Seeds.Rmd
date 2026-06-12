@@ -1,0 +1,530 @@
+---
+title: "Clustering Analysis of Seed Varieties "
+author: "Sandaru Welikala, Laura Granada, Diego Diaz, Julio Real"
+date: "2024-11-09"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+The SEEDS dataset contains measurements of the geometrical properties of kernels belonging to three different varieties of wheat: Kama, Rosa, and Canadian. A total of 210 kernels (70 from each variety) were examined using a non-destructive soft X-ray technique, which allowed high-quality visualization of the internal kernel structure. This technique is significantly more affordable than other imaging methods like scanning microscopy or laser technology. The dataset consists of seven real-valued attributes: area, perimeter, compactness, length of kernel, width of kernel, asymmetry coefficient, and length of kernel groove. All measurements were obtained from wheat grain harvested from experimental fields at the Institute of Agrophysics of the Polish Academy of Sciences in Lublin.
+
+Size: 210 rows (instances) and 7 columns (features).
+	Variables:
+
+```{r}
+library(ggplot2)
+library(cluster)
+library(factoextra)
+library(GGally) 
+library(dplyr)  
+library(corrplot)
+library(stats)
+library(NbClust)
+library(fpc)
+library(clValid)
+```
+
+```{r}
+column_names <- c("Area", "Perimeter", "Compactness", "Length of kernel", "Width of kernel", "Asymmetry coefficient", "Length of kernel groove", "Variety")
+
+Seeds <- read.csv("../data/seeds_dataset.txt", sep = "", header = FALSE, col.names = column_names)
+head(Seeds)
+```
+
+### Explanatory Data Analysis (EDA)
+
+```{r}
+summary(Seeds)
+```
+
+```{r}
+unique(Seeds$Variety)
+```
+
+The Variety column in the SEEDS dataset indicates the three distinct wheat varieties: Kama, Rosa, and Canadian, represented numerically as 1, 2, and 3.
+
+```{r}
+colSums(is.na(Seeds))
+```
+
+```{r}
+old_par <- par(no.readonly = TRUE)  #graph parameters
+par(mfrow = c(4, 2), mar = c(2, 2, 2, 2))  #4x2 grid
+
+# histograms for each feature to observe distributions
+for (i in 1:(ncol(Seeds) - 1)) {  # Exclude the 'Variety' column for plots
+  hist(Seeds[[i]], main = paste("Histogram of", colnames(Seeds)[i]), xlab = colnames(Seeds)[i], col = "lightblue", border = "black")
+}
+```
+
+V1 (Area): The distribution is approximately uniform with no strong skewness. It shows a spread across a range of values.
+V2 (Perimeter): Slightly skewed to the left, indicating a concentration of kernels with lower perimeter values.
+V3 (Compactness): Has a fairly normal distribution, showing a balanced spread with a slight peak around the center.
+V4 (Length of Kernel): Slightly skewed to the right, suggesting more instances with smaller kernel lengths.
+V5 (Width of Kernel): Appears somewhat uniform with a mild right skew, showing a broad range of kernel widths.
+V6 (Asymmetry Coefficient): Has a pronounced right skew, indicating many kernels have lower asymmetry coefficients, with fewer high values.
+V7 (Length of Kernel Groove): Shows a relatively even distribution with a slight right skew.
+V8 (Class Label): Appears as a categorical variable with equal counts for each class, as expected for a balanced dataset.
+
+```{r}
+# Box plots to detect outliers
+par(mfrow = c(4, 2), mar = c(2, 2, 2, 2)) 
+for (i in 1:(ncol(Seeds) - 1)) {
+  boxplot(Seeds[[i]], main = paste("Boxplot of", colnames(Seeds)[i]), col = "lightgreen")
+}
+
+```
+
+Area (V1): No major outliers; K-means and K-means++ should perform stably.
+Perimeter (V2): Balanced, no significant outliers; minimal impact on clustering stability.
+Compactness (V3): One minor outlier; could slightly affect K-means, handled better by K-medoids.
+Length of Kernel (V4): No outliers; all methods should be stable here.
+Width of Kernel (V5): Uniform, no outliers; stable clustering expected.
+Asymmetry Coefficient (V6): Contains high-end outliers; K-medoids should manage these better than K-means or K-means++.
+Length of Kernel Groove (V7): Even, no significant outliers; stable across methods.
+Variety (V8): Categorical; useful for evaluating clustering accuracy after applying the methods.
+
+```{r}
+cor_matrix <- cor(Seeds[, 1:7], use = "complete.obs")
+cor_matrix
+
+corrplot(cor_matrix, method = "color", type = "upper", 
+         col = colorRampPalette(c("blue", "white", "red"))(200),
+         tl.col = "black", tl.cex = 0.8, 
+         addCoef.col = "black", # Correlation numbers in black
+         number.cex = 0.5, # Size of numbers
+         title = "Correlation Heatmap", 
+         mar = c(0, 0, 1, 0))
+```
+
+According the correlation matrix we can identify that Area and Perimeter, Area and Length.of.kernal, Area and Width.of.kernal, Perimeter and Length.of.kernal, Perimeter and Width.of.kernal, Length.of.kernal and Length.of.kernal.groove has a high positive correlation.
+
+The Compactness and Width.of.kernal, Area and Length.of.kernal.groove has moderate positive correlation. 
+
+Assymmetry.coefficient has weak negative correlation with all other variables.
+
+* Variables like Area, Perimeter, Length of kernel, and Width of kernel are highly correlated with one another, likely because they measure related aspects of the kernel size.
+
+* Asymmetry coefficient has weak or negative correlations with most variables, implying it may capture a distinct feature not directly tied to kernel size or shape.
+
+* Compactness has moderate correlations with Width.of.kernel and Area but lower correlations with Length.of.kernel and Length.of.kernel.groove, suggesting that compactness is more closely related to the overall size and width of the kernel rather than its length or groove characteristics.
+
+```{r}
+pairs(Seeds[, 1:7], main = "Scatter Plots of SEEDS Dataset")
+```
+
+Strong Linear Relationships: The scatter plots between Area and Perimeter, as well as between Length of kernel and Perimeter, show strong positive linear relationships. These relationships suggest that these features may contribute similarly when forming clusters in K-means, K-medoids, and K-means++.
+
+Non-linear Patterns: Some plots, such as Compactness vs. Area, show more scattered points with non-linear distributions. This may influence clustering accuracy as non-linear relationships can affect centroid placement in K-means.
+
+Clusters and Overlaps: While some pairs like Length of kernel and Width of kernel show potential natural group separations, others like Asymmetry coefficient vs. Compactness appear more overlapped, indicating possible challenges in distinguishing clusters with these features.
+
+Outlier Presence: A few plots, such as Asymmetry coefficient vs. other features, show points that might be outliers. Outliers can influence K-means and K-means++ results more significantly than K-medoids, as K-medoids is generally more robust to outliers.
+
+```{r}
+Seeds$Variety <- as.factor(Seeds$Variety)
+
+variable_names <- colnames(Seeds)[1:7]  # Select the first 7 variables
+
+for (var in variable_names) {
+  p <- ggplot(Seeds, aes(x = Variety, y = .data[[var]])) +
+    geom_boxplot() +
+    ggtitle(paste("Boxplot for", var, "by Wheat Variety")) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p)
+}
+```
+
+According to the boxplot, we can see that distribution of variables V1, V2, V4, V5 and V6 among Wheat variety is clearly separated. This suggests that there might be significant differences in the values of these variables across the wheat varieties.
+
+## Assessing Cluster Tendency
+
+We visualize the data to assess whether they contains any meaningful clusters. As data contains more than 2 variables we need to reduce dimensionality in order to plot a scatterplot. For that we use PCA to reduce dimensionality of the dataset.
+
+```{r}
+scaled_data <- scale(Seeds[1:7])
+fviz_pca_ind(prcomp(scaled_data), title = "PCA - Seeds", 
+             habillage = Seeds$Variety,  palette = "jco",
+             geom = "point", ggtheme = theme_classic(),
+             legend = "bottom")
+```
+
+It can be seen that Seeds dataset contains 3 real clusters.
+
+*Applying k-means and hierarchical clustering on the dataset*
+
+```{r}
+set.seed(123)
+
+km.res <- kmeans(scaled_data, 3)
+
+fviz_cluster(list(data = scaled_data, cluster = km.res$cluster),
+             ellipse.type = "norm", geom = "point", stand = FALSE,
+             palette = "jco", ggtheme = theme_classic())
+
+fviz_dend(hclust(dist(scaled_data)), k = 3, k_colors = "jco",  
+          as.ggplot = TRUE, show_labels = FALSE)
+```
+
+It can be seen that k-means algorithm and hierarchical clustering impose a 3 distinctive separate clusters in this dataset.
+
+Further to asses if the dataset contains any meaningful clusters we checked for **Hopkins Statistic**
+
+$H_0$: There is no meaningful cluster structure in the data. ($H < 0.5$)
+
+$H_a$: There is meaningful cluster structure in the data.
+
+```{r}
+res1 <- get_clust_tendency(scaled_data, n = nrow(scaled_data)-1, graph = FALSE)
+res1$hopkins_stat
+```
+
+According to the results, Seeds dataset is highly clusterable (H value = 0.80 which is far above the threshold 0.5)
+
+```{r}
+fviz_dist(dist(scaled_data), show_labels = FALSE)
+```
+
+The dissimilarity matrix image shows that there is a cluster structure in the Seeds dataset.
+
+## Determining the optimal number of clusters
+
+```{r}
+# Elbow method
+fviz_nbclust(scaled_data, kmeans, method = "wss") +
+    geom_vline(xintercept = 3, linetype = 2)+
+  labs(subtitle = "Elbow method")
+
+# Silhouette method
+fviz_nbclust(scaled_data, kmeans, method = "silhouette")+
+  labs(subtitle = "Silhouette method")
+
+# Gap statistic
+# nboot = 50 to keep the function speedy. 
+# recommended value: nboot= 500 for your analysis.
+# Use verbose = FALSE to hide computing progression.
+set.seed(123)
+fviz_nbclust(scaled_data, kmeans, nstart = 25,  method = "gap_stat", nboot = 50)+
+  labs(subtitle = "Gap statistic method")
+```
+
+* Elbow method - 3 clusters solution suggested
+
+* Silhouette method - 2 clusters solution suggested
+
+* Gap statistic method - 3 clusters solution suggested
+
+According to these observations, it's possible to define k=3 as the optimal number of clusters in the Seeds dataset.
+
+### K-means
+
+```{r}
+set.seed(123)
+km.res <- kmeans(scaled_data, 3, nstart =25)
+print(km.res)
+```
+
+```{r}
+aggregate(Seeds, by=list(cluster=km.res$cluster), mean)
+```
+
+*Visualizing k-means clusters*
+
+```{r}
+fviz_cluster(km.res, data = scaled_data, geom = "point", ellipse.type = "convex", ggtheme = theme_minimal())
+```
+
+```{r}
+fviz_cluster(km.res, data = scaled_data,
+  ellipse.type ="euclid",# Concentrationellipse
+  star.plot =TRUE,# Addsegments from centroidsto items
+  repel =TRUE,# Avoidlabel overplotting (slow)
+  ggtheme =theme_minimal()
+ )
+```
+
+### PAM 
+
+```{r}
+pam.res <-pam(scaled_data, 3)
+print(pam.res)
+```
+
+```{r}
+dd <- cbind(scaled_data, cluster = pam.res$cluster)
+head(dd, n = 3)
+```
+
+```{r}
+pam.res$medoids
+```
+
+*Visualizing PAM result*
+
+```{r}
+fviz_cluster(pam.res,
+ ellipse.type = "t", # Concentration ellipse
+ repel = TRUE, # Avoid label overplotting (slow)
+ ggtheme = theme_classic()
+)
+```
+
+### CLARA
+
+```{r}
+clara.res <- clara(scaled_data, 3, samples = 50, pamLike = TRUE)
+print(clara.res)
+```
+
+```{r}
+dd <- cbind(scaled_data, cluster = clara.res$cluster)
+head(dd, n = 4)
+```
+
+```{r}
+# Medoids
+clara.res$medoids
+```
+
+*Visualizing CLARA clusters*
+
+```{r}
+fviz_cluster(clara.res,
+ ellipse.type = "t", # Concentration ellipse
+ geom = "point", pointsize = 1,
+ ggtheme = theme_classic()
+ )
+```
+
+## Cluster Validation Statistics
+
+**Internal cluster validation - Silhouette, Dunn Index, Connectivity**
+
+### Silhouette coefficient
+
+```{r}
+sil_kmeans <- silhouette(km.res$cluster, dist(scaled_data))
+sil_pam <- silhouette(pam.res$cluster, dist(scaled_data))
+sil_clara <- silhouette(clara.res$cluster, dist(scaled_data))
+
+fviz_silhouette(sil_kmeans, palette = "jco", ggtheme = theme_classic())
+fviz_silhouette(sil_pam, palette = "jco", ggtheme = theme_classic())
+fviz_silhouette(sil_clara, palette = "jco", ggtheme = theme_classic())
+```
+
+### Dunn Index
+
+```{r}
+# Statistics for k-means clustering 
+km_stats <- cluster.stats(dist(scaled_data),  km.res$cluster) 
+# Dun index 
+km_stats$dunn 
+
+pam_stats <- cluster.stats(dist(scaled_data),  pam.res$cluster) 
+pam_stats$dunn 
+
+clara_stats <- cluster.stats(dist(scaled_data),  clara.res$cluster) 
+clara_stats$dunn
+```
+
+### Connectivity
+
+```{r}
+connectivity(dist(scaled_data), km.res$cluster, neighbSize = 2)
+connectivity(dist(scaled_data), pam.res$cluster, neighbSize = 2)
+connectivity(dist(scaled_data), clara.res$cluster, neighbSize = 2)
+```
+
+**External cluster validation - Rand Index, Adjuster Rand Index**
+
+### Rand Index
+
+```{r}
+table(Seeds$Variety, km.res$cluster) 
+```
+
+```{r}
+variety <- as.numeric(Seeds$Variety) 
+clust_stats <- cluster.stats(d = dist(scaled_data),  variety, km.res$cluster)
+# Corrected Rand index 
+clust_stats$corrected.rand 
+# VI
+clust_stats$vi
+```
+
+The corrected Rand index provides a measure for assessing the similarity between two partitions, adjusted for chance. Agreement between the seed variety types and the cluster solution is  0.77 using Rand index and 0.59 using Meila’s VI.
+
+```{r}
+table(Seeds$Variety, pam.res$cluster)
+```
+
+```{r}
+cluster.stats(d = dist(scaled_data),  variety, pam.res$cluster)$corrected.rand
+```
+
+```{r}
+table(Seeds$Variety, clara.res$cluster)
+```
+
+```{r}
+cluster.stats(d = dist(scaled_data),  variety, clara.res$cluster)$corrected.rand
+```
+
+### PRINCIPAL COMPONENT ANALYSIS 
+
+We are applying PCA to the SEEDS dataset before clustering to reduce the dimensionality while retaining most of the variance in the data. This step simplifies the dataset, reduces noise, and enhances computational efficiency. By focusing on uncorrelated components, PCA helps ensure that the clustering algorithms (K-means, K-medoids, and K-means++) operate on a more interpretable and balanced feature set, improving the overall clustering performance and stability.
+
+```{r}
+#PCA
+pca_result <- prcomp(Seeds[, 1:7], scale. = TRUE)
+summary(pca_result)
+```
+
+The first principal component PC1 explains approximately 71.87% of the variance in the SEEDS dataset, while the second PC2 and third PC3 components contribute 17.11% and 9.69%, respectively. Together, the first three components account for nearly 98.67% of the total variance, indicating that these components effectively capture the majority of the information within the data. Therefore, using the first few principal components for clustering can significantly simplify the dataset while retaining its essential structure.
+
+```{r}
+# Plot PCA results
+fviz_pca_ind(pca_result, geom.ind = "point", col.ind = "cos2", gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), repel = TRUE)
+```
+
+#SCALING 
+
+Before applying K-means clustering, we will scale the data to ensure consistent feature contributions. The K-means algorithm relies on Euclidean distance, meaning features with larger scales can dominate clustering results. In the SEEDS dataset, attributes such as Area, Perimeter, and Length of kernel groove vary significantly compared to features like Compactness or Asymmetry coefficient. By scaling, we balance these differences, allowing each feature to equally influence cluster formation and improve clustering stability across K-means, K-medoids, and K-means++ methods.
+
+```{r}
+scaled_data <- scale(Seeds[, 1:7])
+```
+
+We assume three initial clusters for the K-means, K-means++, and K-medoids clustering algorithms based on the known structure of the SEEDS dataset, which consists of three distinct wheat varieties: Kama, Rosa, and Canadian.
+
+#K-MEANS
+
+```{r}
+# k-means 3 clusters
+set.seed(123)
+kmeans_result <- kmeans(scaled_data, centers = 3, nstart = 25)
+
+print(kmeans_result)
+```
+
+The K-means algorithm partitioned the SEEDS dataset into three clusters with sizes of 71, 67, and 72, which aligns with the dataset's known three wheat varieties. The cluster centers reveal the mean standardized values for each feature within the clusters, highlighting differences across attributes such as Area, Perimeter, and Length of kernel groove.
+
+The within-cluster sum of squares for each cluster (144.46, 139.55, and 144.60) indicates the compactness of the clusters, with a between-cluster sum of squares to total sum of squares ratio of 70.7%, suggesting a moderately good cluster separation. This result implies that the clusters formed capture a significant portion of the dataset's variance but may benefit from further optimization or comparison with other clustering methods.
+
+```{r}
+# Visualize the clusters
+fviz_cluster(kmeans_result, data = scaled_data, geom = "point", ellipse.type = "convex", ggtheme = theme_minimal())
+```
+
+```{r}
+# KMEANS cluster centers
+kmeans_result$centers
+```
+
+#K-MEANS++
+
+```{r}
+#K-means++ 
+set.seed(123)
+kmeans_plus_result <- kmeans(scaled_data, centers = 3, nstart = 25, algorithm = "Lloyd")
+print(kmeans_plus_result)
+fviz_cluster(kmeans_plus_result, data = scaled_data, geom = "point", ellipse.type = "convex", ggtheme = theme_minimal(), main = "K-means++ Clustering")
+```
+
+The K-means++ algorithm generated three clusters with sizes as indicated in the result. The between-cluster sum of squares to total sum of squares ratio is 70.7%, indicating the proportion of variance explained by the clusters. This value shows moderate clustering quality, suggesting that the data has distinguishable groups, though not perfectly separated.
+
+###As it was not clear for me the difference between K-means and K-means++ here there are some differences. Not sure if we sure include this or not having into account that he did not teach about K-means++
+
+Difference Between K-means and K-means++:
+
+Initialization: The primary difference lies in the initialization step. K-means++ selects initial centroids in a more intelligent way, ensuring that they are spread out, which helps avoid poor cluster initialization and local minima.
+
+Stability and Efficiency: K-means++ often leads to better and more stable results compared to traditional K-means, as it reduces the chances of random initialization leading to suboptimal clustering.
+
+Clustering Outcome: K-means++ typically yields clusters with lower within-cluster variance and improves convergence speed due to better initial centroids.
+
+#K-MEDOIDS
+
+```{r}
+# K-medoids clustering
+pam_result <- pam(scaled_data, k = 3)
+print(pam_result)
+fviz_cluster(pam_result, geom = "point", ellipse.type = "convex", ggtheme = theme_minimal(), main = "K-medoids Clustering")
+
+```
+
+The K-medoids clustering algorithm produced three clusters, represented by the clustering vector with specific assignments. The objective function values (build = 1.388781 and swap = 1.354058) indicate the cost of forming these clusters, with lower values implying better compactness and overall cluster quality.
+
+###here there are additional notes regarding K-medoids
+Robustness: K-medoids is more robust to outliers compared to K-means because it uses actual data points (medoids) as cluster centers.
+
+Cluster Size: The distribution of points across the clusters indicates balance, contributing to stability in cluster assignments.
+
+Objective Values: These highlight the cost of forming clusters during the medoid selection (build phase) and optimization (swap phase), suggesting the overall effectiveness of the algorithm.
+
+#CLUSTER STABILITY
+
+```{r}
+# Compare clustering stability using silhouette scores
+sil_kmeans <- silhouette(kmeans_result$cluster, dist(scaled_data))
+mean(sil_kmeans[, 3])  # Average silhouette width for K-means
+
+sil_kmeans_plus <- silhouette(kmeans_plus_result$cluster, dist(scaled_data))
+mean(sil_kmeans_plus[, 3])  # Average silhouette width for K-means++
+
+sil_pam <- silhouette(pam_result$clustering, dist(scaled_data))
+mean(sil_pam[, 3])  # Average silhouette width for K-medoids
+```
+
+The average silhouette width values for the clustering methods are as follows:
+
+K-means: 0.40
+K-means++: 0.40
+K-medoids: 0.39
+
+the clustering results suggest moderate separation among clusters, with K-means and K-means++ providing similar performance. K-medoids, while slightly less compact, remains robust to outliers, making it a good alternative for datasets with potential noise or outliers.
+
+#SILHOUETTE PLOTS
+
+```{r}
+#silhouette plots
+fviz_silhouette(sil_kmeans, main = "Silhouette Plot for K-means")
+fviz_silhouette(sil_kmeans_plus, main = "Silhouette Plot for K-means++")
+fviz_silhouette(sil_pam, main = "Silhouette Plot for K-medoids")
+```
+
+K-means:
+The silhouette plot for K-means shows clusters with a moderate average silhouette width, indicating that while most points are well-clustered (positive silhouette values), some overlap and less-defined boundaries are present, particularly in clusters 1 and 3.
+The red dashed line marks the average silhouette score, highlighting the general clustering quality.
+
+K-means++:
+The K-means++ silhouette plot closely resembles that of the standard K-means. The average silhouette width is similar, confirming that the improved initialization method helps achieve more reliable initial centroids but does not drastically change the cluster quality for this dataset.
+Slight improvements in cluster separation may be observed, enhancing stability during different runs.
+
+K-medoids:
+The silhouette plot for K-medoids also shows a moderate clustering quality, similar to K-means and K-means++. However, the shape of the clusters and silhouette width distribution suggest that K-medoids might handle outliers better, as indicated by fewer points with very low silhouette scores.
+This method can be more robust, especially in datasets with potential noise or skewed distributions.
+
+#CLUSTER STABILITY
+
+```{r}
+# Analyze cluster stability and outlier management
+outliers <- boxplot.stats(Seeds$`Asymmetry coefficient`)$out  # Example for one variable
+outliers
+```
+
+### How else could we analyze cluster stability and outlier management??? Not sure how this works.
+
+#Conclusion for the Research Question
+
+In comparing K-means, K-means++, and K-medoids clustering on the SEEDS dataset, the following observations were made:
+
+K-means and K-means++ produced similar results in terms of silhouette scores and cluster quality, with average silhouette widths around 0.40. This suggests that both methods performed moderately well in creating distinguishable clusters, with K-means++ offering more reliable initial centroids due to its improved initialization strategy.
+K-medoids, while showing a slightly lower average silhouette score (~0.39), demonstrated robustness against outliers, making it a good option for datasets prone to noise or with non-uniform distributions.
+The distribution of clusters and their characteristics indicated that all three methods were able to capture the underlying structure of the SEEDS dataset, which consists of three wheat varieties.
+Overall, K-means++ provided a balance of efficiency and stability, while K-medoids offered better handling of outliers. 
+
+For the SEEDS dataset, K-means++ appears to be the better method overall.
