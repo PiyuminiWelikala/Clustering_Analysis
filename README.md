@@ -216,5 +216,3 @@ install.packages(c(
 > **Note:** `rnaturalearth` and `sf` are required for the world map visualization in the GPI analysis. On some systems, `sf` may require additional system-level dependencies (GDAL, GEOS). See the [sf installation guide](https://r-spatial.github.io/sf/) if installation fails.
 
 ---
-
-*DANA Course — Clustering Analysis Project, November 2024*
